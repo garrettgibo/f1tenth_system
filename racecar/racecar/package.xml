@@ -19,7 +19,8 @@
   <run_depend>razor_imu_9dof</run_depend>
   <run_depend>tf</run_depend>
   <run_depend>tf2_ros</run_depend>
-  <run_depend>urg_node</run_depend>
+  <run_depend>sick_scan</run_depend>
+  <run_depend>realsense2_camera</run_depend>
   <run_depend>joy</run_depend>
   <run_depend>rosbag</run_depend>
   <run_depend>rostopic</run_depend>

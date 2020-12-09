@@ -7,9 +7,12 @@
   <rosparam file="$(arg sensors_config)" command="load" />
 
   <!-- laser -->
-  <node pkg="hokuyo_node" type="hokuyo_node" name="laser_node" />
-<!-- Set the port to connect to here -->
+  <!--<node pkg="hokuyo_node" type="hokuyo_node" name="laser_node" /> -->
+  <!-- Set the port to connect to here -->
   <param name="port" type="string" value="/dev/ttyACM0"/> 
+  <include file="$(find sick_scan)/launch/sick_tim_5xx.launch" />
+  <include file="$(find realsense2_camera)/launch/rs_camera.launch" />
+ 
 
   <!-- imu -->
   <!--node pkg="razor_imu_9dof" type="imu_node.py" name="imu_node" /-->

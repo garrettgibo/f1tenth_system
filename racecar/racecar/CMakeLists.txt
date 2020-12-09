@@ -82,7 +82,9 @@ catkin_package(
     razor_imu_9dof
     tf
     tf2_ros
-    urg_node
+    sick_scan
+    realsense2_camera
+    # urg_node
     joy
     rosbag
     rostopic
@@ -134,8 +136,8 @@ catkin_package(
 ## Mark executable scripts (Python etc.) for installation
 ## in contrast to setup.py, you can choose the destination
 # install(PROGRAMS
-#   scripts/my_python_script
-#   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+# scripts/test_pub.py
+# DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 # )
 
 ## Mark executables and/or libraries for installation
