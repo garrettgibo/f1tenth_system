@@ -57,10 +57,10 @@ class LineFollower:
         self.image_rgb = rospy.Publisher("camera_rgb", Image)
         self.image_gray = rospy.Publisher("camera_gray", Image)
         self.bridge = CvBridge()
-        self.avg_steerings = []
-        self.max_steering_deviation = .1
+        # self.avg_steerings = []
+        self.steering = 0  # straight
 
-    def display_heading_line(frame, steering_angle, line_color=(0, 0, 255), line_width=2):
+    def display_heading_line(self, frame, steering_angle, line_color=(0, 0, 255), line_width=2):
         heading_image = np.zeros_like(frame)
         height, width, _ = frame.shape
 
@@ -72,7 +72,8 @@ class LineFollower:
         # 0-89 degree: turn left
         # 90 degree: going straight
         # 91-180 degree: turn right
-        steering_angle_radian = steering_angle / 180.0 * math.pi
+        import math
+        steering_angle_radian = 1/(steering_angle) # / 180.0 * math.pi)
         x1 = int(width / 2)
         y1 = height
         x2 = int(x1 - height / 2 / math.tan(steering_angle_radian))
@@ -84,16 +85,13 @@ class LineFollower:
         return heading_image
 
     def hough_steering(self, cam_img):
-        scan_line = cam_img[self.vert_scan_y : -50, :, :]
-        img_blur = cv2.GaussianBlur(scan_line, (7, 7), 0)
-
+        scan_line = cam_img[self.vert_scan_y :, :, :]
+        img_blur = cv2.GaussianBlur(scan_line, (9, 9), 0)
         img_gray = cv2.cvtColor(img_blur, cv2.COLOR_BGR2GRAY)
-        ret3,th3 = cv2.threshold(img_gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-
-        edges = cv2.Canny(img_blur, 100, 200, apertureSize = 3)
+        edges = cv2.Canny(img_blur, 50, 150, apertureSize = 3)
         # kernel = np.ones((5, 5),np.uint8)
         # edges = cv2.dilate(edges, kernel, iterations = 1)
-        self.image_gray.publish(self.bridge.cv2_to_imgmsg(edges, "mono8"))
+        # self.image_gray.publish(self.bridge.cv2_to_imgmsg(edges, "mono8"))
         lines = cv2.HoughLinesP(edges, 1, np.pi/180, 50, minLineLength=50, maxLineGap=25)
         slopes = []
 
@@ -103,36 +101,28 @@ class LineFollower:
             slope = (y2 - y1) / float(x2 - x1)
             slopes.append(slope)
 
-        avg_slope = np.mean(slopes) * -1
-        angle = np.arctan(avg_slope) * 180 / np.pi
+        avg_slope =  np.mean(slopes)
+        curr_angle = np.arctan(avg_slope)
 
-        if angle > 0:
-            steering =  (angle - 90) / 90
-        else:
-            steering =  (angle + 90) / 90
+        self.max_steering_deviation = .025
+        # rospy.logerr(self.steering)
+        # img  = self.display_heading_line(img_blur, self.steering)
 
-        self.avg_steerings.append(steering)
-        num_steerings = 2
-        if len(self.avg_steerings) > num_steerings:
-            steering = np.mean(self.avg_steerings[-1 * num_steerings:])
-            angle_deviation = self.avg_steerings[-1] - steering
-            if  abs(angle_deviation) > self.max_steering_deviation:
-                steering = int(steering + self.max_steering_deviation * angle_deviation / abs(angle_deviation))
-
-        img  = display_heading_line(img_blur, angle)
-
-        return img, steering
+        return img_blur, curr_angle
 
     def run(self, cam_img):
         #img_lane_mask, avg_lane_pos = self.lane_detection(cam_img)
-        img_lane_mask, self.steering = self.hough_steering(cam_img)
+        img_lane_mask, steering = self.hough_steering(cam_img)
 
-        self.throttle = 0.75
+        scale_throttle = 2.5
+        scale_steering = 0.7
+        self.throttle = 0.75 * scale_throttle
+        self.steering = steering * scale_steering
 
         # pub lanes "masks"
         self.image_rgb.publish(self.bridge.cv2_to_imgmsg(img_lane_mask, "bgr8"))
 
-        rospy.logerr("steering: {} -- throttle: {}".format(self.steering, self.throttle))
+        # rospy.logerr("steering: {} -- throttle: {}".format(self.steering, self.throttle))
         return self.steering, self.throttle
 
 class JoyTeleop:
@@ -329,7 +319,7 @@ class JoyTeleop:
         """Run command for autonmous mode."""
         cmd = self.command_list[c]
         msg = self.get_message_type(cmd["message_type"])()
-        rospy.logerr("Name: {}".format(c))
+        # rospy.logerr("Name: {}".format(c))
 
         # Do some image processing
         cam_img = self.image_processor.get_image()
