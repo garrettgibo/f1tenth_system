@@ -58,10 +58,7 @@ void VescToOdom::vescStateCallback(const vesc_msgs::VescStateStamped::ConstPtr& 
     return;
 
   // convert to engineering units
-  double current_speed = ( -state->state.speed - speed_to_erpm_offset_ ) / speed_to_erpm_gain_;
-  if (std::fabs(current_speed) < 0.05){
-    current_speed = 0.0;
-  }
+  double current_speed = ( state->state.speed - speed_to_erpm_offset_ ) / speed_to_erpm_gain_;
   double current_steering_angle(0.0), current_angular_velocity(0.0);
   if (use_servo_cmd_) {
     current_steering_angle =
