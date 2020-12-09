@@ -1,0 +1,13 @@
+<!-- -*- mode: XML -*- -->
+<launch>
+  <arg name="racecar_version" />
+  <arg name="autopilot_config"
+       default="$(find racecar)/config/$(arg racecar_version)/autopilot.yaml" />
+
+  <rosparam file="$(arg autopilot_config)" command="load" />
+
+  <node pkg="joy" type="joy_node" name="joy_node" />
+
+  <node pkg="racecar" type="autopilot.py" name="autopilot_node" />
+
+</launch>
