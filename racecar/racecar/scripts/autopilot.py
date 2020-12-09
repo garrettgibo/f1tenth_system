@@ -84,6 +84,26 @@ class LineFollower:
 
         return heading_image
 
+    def stabilize_steering_angle(
+            self,
+            curr_steering_angle,
+            new_steering_angle,
+            max_angle_deviation=5):
+        new_steering_angle *= 180 / np.pi
+        curr_steering_angle *= 180 / np.pi
+
+        angle_deviation = new_steering_angle - curr_steering_angle
+#        rospy.logerr(angle_deviation)
+        if abs(angle_deviation) > max_angle_deviation:
+            stabilized_steering_angle = int(curr_steering_angle 
+                + max_angle_deviation * angle_deviation / abs(angle_deviation))
+        else:
+            stabilized_steering_angle = new_steering_angle
+
+        stabilized_steering_angle *= np.pi / 180
+
+        return stabilized_steering_angle
+
     def hough_steering(self, cam_img):
         scan_line = cam_img[self.vert_scan_y :, :, :]
         img_blur = cv2.GaussianBlur(scan_line, (9, 9), 0)
@@ -102,13 +122,13 @@ class LineFollower:
             slopes.append(slope)
 
         avg_slope =  np.mean(slopes)
-        curr_angle = np.arctan(avg_slope)
+        new_angle = np.arctan(avg_slope)
 
-        self.max_steering_deviation = .025
-        # rospy.logerr(self.steering)
+        max_angle_deviation = 8
+        stabilized_angle = self.stabilize_steering_angle(self.steering, new_angle, max_angle_deviation)
         # img  = self.display_heading_line(img_blur, self.steering)
 
-        return img_blur, curr_angle
+        return img_blur, stabilized_angle 
 
     def run(self, cam_img):
         #img_lane_mask, avg_lane_pos = self.lane_detection(cam_img)
