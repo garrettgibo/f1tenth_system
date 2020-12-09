@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import importlib
 
+import math
 import rospy
 import genpy.message
 from rospy import ROSException
@@ -72,8 +73,13 @@ class LineFollower:
         # 0-89 degree: turn left
         # 90 degree: going straight
         # 91-180 degree: turn right
-        import math
-        steering_angle_radian = 1/(steering_angle) # / 180.0 * math.pi)
+        # steering_angle *= 180 / np.pi
+
+        steering_angle = np.pi / 2 - steering_angle
+            
+        # steering_angle *= np.pi / 180
+
+        steering_angle_radian  = steering_angle
         x1 = int(width / 2)
         y1 = height
         x2 = int(x1 - height / 2 / math.tan(steering_angle_radian))
@@ -105,44 +111,106 @@ class LineFollower:
         return stabilized_steering_angle
 
     def hough_steering(self, cam_img):
-        scan_line = cam_img[self.vert_scan_y :, :, :]
+        scan_line = cam_img[self.vert_scan_y : -50, :, :]
         img_blur = cv2.GaussianBlur(scan_line, (9, 9), 0)
         img_gray = cv2.cvtColor(img_blur, cv2.COLOR_BGR2GRAY)
-        edges = cv2.Canny(img_blur, 50, 150, apertureSize = 3)
+
+        # get white line
+        img_hsv = cv2.cvtColor(scan_line, cv2.COLOR_BGR2HSV)
+        lower_white = np.array([0, 0, 255 - 100])
+        upper_white = np.array([255, 40, 255])
+        mask_white = cv2.inRange(img_hsv, lower_white, upper_white)
+
+        # get yellow line
+        lower_yellow = np.array([40, 0, 0])
+        upper_yellow = np.array([80, 255, 255])
+        mask_yellow = cv2.inRange(img_hsv, lower_yellow, upper_yellow)
+
+        mask_yellow = cv2.bitwise_not(mask_yellow)
+
+        mask = cv2.bitwise_or(mask_white, mask_yellow)
+        mask = mask_white
+
+
+
+        edges = cv2.Canny(mask, 50, 150, apertureSize = 3)
+        self.image_gray.publish(self.bridge.cv2_to_imgmsg(edges, "mono8"))
+        # edges = cv2.Canny(img_blur, 50, 150, apertureSize = 3)
         # kernel = np.ones((5, 5),np.uint8)
         # edges = cv2.dilate(edges, kernel, iterations = 1)
         # self.image_gray.publish(self.bridge.cv2_to_imgmsg(edges, "mono8"))
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, 50, minLineLength=50, maxLineGap=25)
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, 30, minLineLength=40, maxLineGap=50)
         slopes = []
 
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            cv2.line(img_blur, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            slope = (y2 - y1) / float(x2 - x1)
-            slopes.append(slope)
+        height, width = mask.shape
 
-        avg_slope =  np.mean(slopes)
-        new_angle = np.arctan(avg_slope)
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                cv2.line(scan_line, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                slope = (y2 - y1) / float(x2 - x1)
+                
+                # essential to make sharp turns`
+                if abs(slope) < 0.5:
+                    # rospy.logerr("1")
+                    slope *= 9.5
+                # should make it go straight better
+                elif abs(slope) > 2 :
+                    # rospy.logerr("2")
+                    slope  *= 6
+                # straight better on turns to weight one side more
+                elif x1 < width / 2:
+                    if x1 < width / 4 and height - y1 < height / 2:
+                        # r# ospy.logerr("3")
+                        slope *= 2.5
+                else:
+                    if abs(width / 4  - x1) < 75 and height - y2 < height / 2:
+                        # rospy.logerr("4")
+                        slope *= 2.5
 
-        max_angle_deviation = 8
-        stabilized_angle = self.stabilize_steering_angle(self.steering, new_angle, max_angle_deviation)
-        # img  = self.display_heading_line(img_blur, self.steering)
 
-        return img_blur, stabilized_angle 
+                slopes.append(slope)
+        else:
+            slopes.append(self.avg_slope)
+
+        self.avg_slope =  np.mean(slopes)
+        # rospy.logerr(self.avg_slope)
+        new_angle = np.arctan(self.avg_slope)
+
+        img  = self.display_heading_line(scan_line, new_angle)
+
+        return img, new_angle
+
+    def stabilize_throttle(self, throttle, steering, max_steering_deviation):
+        # get diff of old and new steering
+        steering_deviation = (self.steering - steering) * 180 / np.pi
+        
+        if abs(steering_deviation) > max_steering_deviation:
+            new_throttle = throttle - abs(steering_deviation * throttle / 90 )
+        else:
+            new_throttle = self.cruise_throttle
+
+        return new_throttle
 
     def run(self, cam_img):
         #img_lane_mask, avg_lane_pos = self.lane_detection(cam_img)
         img_lane_mask, steering = self.hough_steering(cam_img)
 
-        scale_throttle = 2.5
+        # rospy.logerr("angle delta: {}".format((self.steering - steering) * 180 / np.pi))
+        max_angle_deviation = 5.5
+        stabilized_angle = self.stabilize_steering_angle(self.steering, steering, max_angle_deviation)
+
+        scale_throttle = 3.4
         scale_steering = 0.7
-        self.throttle = 0.75 * scale_throttle
-        self.steering = steering * scale_steering
+        self.cruise_throttle = 0.75 * scale_throttle
+
+        # self.throttle  = self.stabilize_throttle(self.cruise_throttle, steering, 20)
+        self.throttle = self.cruise_throttle
+        self.steering = stabilized_angle * scale_steering
 
         # pub lanes "masks"
         self.image_rgb.publish(self.bridge.cv2_to_imgmsg(img_lane_mask, "bgr8"))
-
-        # rospy.logerr("steering: {} -- throttle: {}".format(self.steering, self.throttle))
+        rospy.logerr("steering: {} -- throttle: {}".format(self.steering * 180 / np.pi, self.throttle))
         return self.steering, self.throttle
 
 class JoyTeleop:
