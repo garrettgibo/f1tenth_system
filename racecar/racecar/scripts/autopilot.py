@@ -5,13 +5,15 @@ import rospy
 import genpy.message
 from rospy import ROSException
 import sensor_msgs.msg
+from sensor_msgs.msg import Image
 import actionlib
 import rostopic
 import rosservice
 from threading import Thread
 from rosservice import ROSServiceException
+from cv_bridge import CvBridge
 
-# import cv2
+import cv2
 import numpy as np
 from simple_pid import PID
 
@@ -26,71 +28,108 @@ Pulled on April 28, 2017.
 Edited by Winter Guerra on April 28, 2017 to allow for default actions.
 '''
 
+class ImageProcessor:
+    def __init__(self):
+        self.image_topic = "/camera/color/image_raw"
+        self.image_sub = rospy.Subscriber(self.image_topic, Image, self.image_callback)
+        self.bridge = CvBridge()
+        self.latest_image = np.zeros((720, 480, 3), np.uint8)
+
+
+    def image_callback(self, data):
+        """Transform ROS image to OpenCV image array, then save latest image"""
+        try:
+            cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
+        except CvBridgeError as e:
+            rospy.logerr(e)
+
+        self.latest_image = cv_image
+
+    def get_image(self):
+        """Return latest image that has been converted to OpenCV image array"""
+        return self.latest_image
+
 
 class LineFollower:
     def __init__(self):
-        self.test = 0
-        self.vert_scan_y = 60   # num pixels from the top to start horiz scan
-        self.vert_scan_height = 10 # num pixels high to grab from horiz scan
-        self.color_thr_low = np.asarray((0, 50, 50)) # hsv dark yellow
-        self.color_thr_hi = np.asarray((50, 255, 255)) # hsv light yellow
-        self.target_pixel = None # of the N slots above, which is the ideal relationship target
-        self.steering = 0.0 # from -1 to 1
-        self.throttle = 0.15 # from -1 to 1
-        self.recording = False # Set to true if desired to save camera frames
-        self.delta_th = 0.1 # how much to change throttle when off
-        self.throttle_max = 0.3
-        self.throttle_min = 0.15
-        self.pid_st = PID(Kp=-0.01, Ki=0.00, Kd=-0.001)
-    """
-    def __init__(self):
-        self.vert_scan_y = 60   # num pixels from the top to start horiz scan
-        self.vert_scan_height = 10 # num pixels high to grab from horiz scan
-        self.color_thr_low = np.asarray((0, 50, 50)) # hsv dark yellow
-        self.color_thr_hi = np.asarray((50, 255, 255)) # hsv light yellow
-        self.target_pixel = None # of the N slots above, which is the ideal relationship target
-        self.steering = 0.0 # from -1 to 1
-        self.throttle = 0.15 # from -1 to 1
-        self.recording = False # Set to true if desired to save camera frames
-        self.delta_th = 0.1 # how much to change throttle when off
-        self.throttle_max = 0.3
-        self.throttle_min = 0.15
-        self.pid_st = PID(Kp=-0.01, Ki=0.00, Kd=-0.001)
-    
-    def get_i_color(self, cam_img):
-        # take a horizontal slice of the image
-        iSlice = self.vert_scan_y
-        scan_line = cam_img[iSlice : iSlice + self.vert_scan_height, :, :]
+        self.vert_scan_y = 240   # num pixels from the top to start horiz scan
+        self.img_width = 640
+        self.image_rgb = rospy.Publisher("camera_rgb", Image)
+        self.image_gray = rospy.Publisher("camera_gray", Image)
+        self.bridge = CvBridge()
+        self.avg_steerings = []
+        self.max_steering_deviation = .1
 
-        # convert to HSV color space
-        img_hsv = cv2.cvtColor(scan_line, cv2.COLOR_RGB2HSV)
 
-        # make a mask of the colors in our range we are looking for
-        mask = cv2.inRange(img_hsv, self.color_thr_low, self.color_thr_hi)
+    def kmeans(self, img, K):
+        Z = img.reshape((-1,3))
 
-        # which index of the range has the highest amount of yellow?
-        hist = np.sum(mask, axis=0)
-        max_yellow = np.argmax(hist)
+        # convert to np.float32
+        Z = np.float32(Z)
 
-        return max_yellow, hist[max_yellow], mask
+        # define criteria, number of clusters(K) and apply kmeans()
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        ret, label, center=cv2.kmeans(Z,K,None,criteria,10,cv2.KMEANS_RANDOM_CENTERS)
+
+        # Now convert back into uint8, and make original image
+        center = np.uint8(center)
+        res = center[label.flatten()]
+        res2 = res.reshape((img.shape))
+
+        # convert to gray scale
+        img_gray = cv2.cvtColor(res2, cv2.COLOR_BGR2GRAY)
+
+        return img_gray
+
+    def hough_steering(self, cam_img):
+        scan_line = cam_img[self.vert_scan_y : -50, :, :]
+        img_blur = cv2.GaussianBlur(scan_line, (7, 7), 0)
+
+        img_gray = cv2.cvtColor(img_blur, cv2.COLOR_BGR2GRAY)
+        ret3,th3 = cv2.threshold(img_gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+
+        edges = cv2.Canny(img_blur, 100, 200, apertureSize = 3)
+        # kernel = np.ones((5, 5),np.uint8)
+        # edges = cv2.dilate(edges, kernel, iterations = 1)
+        self.image_gray.publish(self.bridge.cv2_to_imgmsg(edges, "mono8"))
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, 50, minLineLength=50, maxLineGap=25)
+        slopes = []
+
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            cv2.line(img_blur, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            slope = (y2 - y1) / float(x2 - x1)
+            slopes.append(slope)
+
+        avg_slope = np.mean(slopes) * -1
+        angle = np.arctan(avg_slope) * 180 / np.pi
+
+        if angle > 0:
+            steering =  (angle - 90) / 90
+        else:
+            steering =  (angle + 90) / 90
+
+        self.avg_steerings.append(steering)
+        num_steerings = 2
+        if len(self.avg_steerings) > num_steerings:
+            steering = np.mean(self.avg_steerings[-1 * num_steerings:])
+            angle_deviation = self.avg_steerings[-1] - steering
+            if  abs(angle_deviation) > self.max_steering_deviation:
+                steering = int(steering + self.max_steering_deviation * angle_deviation / abs(angle_deviation))
+
+        return img_blur, steering
     
     def run(self, cam_img):
-        max_yellow, confidense, mask = self.get_i_color(cam_img)
-        conf_thresh = 0.001
-        
-        if self.target_pixel is None:
-            # Use the first run of get_i_color to set our relationship with the yellow line.
-            # You could optionally init the target_pixel with the desired value.
-            self.target_pixel = max_yellow
+        #img_lane_mask, avg_lane_pos = self.lane_detection(cam_img)
+        img_lane_mask, self.steering = self.hough_steering(cam_img)
 
-            # this is the target of our steering PID controller
-            self.pid_st.setpoint = self.target_pixel
+        self.throttle = 0.75
 
-        elif confidense > conf_thresh:
-            # invoke the controller with the current yellow line position
-            # get the new steering value as it chases the ideal
-            self.steering = self.pid_st(max_yellow)
-    """
+        # pub lanes "masks"
+        self.image_rgb.publish(self.bridge.cv2_to_imgmsg(img_lane_mask, "bgr8"))
+
+        rospy.logerr("steering: {} -- throttle: {}".format(self.steering, self.throttle))
+        return self.steering, self.throttle
 
 class JoyTeleop:
     """
@@ -113,6 +152,9 @@ class JoyTeleop:
         self.offline_services = []
 
         self.old_buttons = []
+        
+        # custom line follower and image processing pipeline
+        self.image_processor = ImageProcessor()
         self.line_follower = LineFollower()
 
         teleop_cfg = rospy.get_param("teleop")
@@ -286,16 +328,12 @@ class JoyTeleop:
         rospy.logerr("Name: {}".format(c))
 
         # Do some image processing
-        # cam_img = ...
-        #steering, throttle, recording = self.line_follower.run(cam_img)
-        # steering, throttle = 0.5 , 0.5
+        cam_img = self.image_processor.get_image()
+        steering, throttle = self.line_follower.run(cam_img)
 
-        # rospy.logerr("steering: {} -- throttle: {}".format(steering, throttle))
         # control car here
-        # self.set_member(msg, "drive.speed", throttle)
-        # self.set_member(msg, "drive.steering_angle", steering)
-        self.set_member(msg, "drive.speed", 0)
-        self.set_member(msg, "drive.steering_angle", 0)
+        self.set_member(msg, "drive.speed", throttle)
+        self.set_member(msg, "drive.steering_angle", steering)
 
         self.publishers[cmd['topic_name']].publish(msg)
 

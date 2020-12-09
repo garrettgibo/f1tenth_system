@@ -29,7 +29,7 @@ teleop:
       -
         axis: 4
         target: drive.speed
-        scale: 1.5                   # joystick will command plus or minus 2 meters / second
+        scale: 2.5                   # joystick will command plus or minus 2 meters / second
         offset: 0.0
       -
         axis: 0
