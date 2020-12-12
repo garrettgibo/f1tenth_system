@@ -60,26 +60,28 @@ class LineFollower:
         self.avg_steerings = []
         self.max_steering_deviation = .1
 
+    def display_heading_line(frame, steering_angle, line_color=(0, 0, 255), line_width=2):
+        heading_image = np.zeros_like(frame)
+        height, width, _ = frame.shape
 
-    def kmeans(self, img, K):
-        Z = img.reshape((-1,3))
+        # figure out the heading line from steering angle
+        # heading line (x1,y1) is always center bottom of the screen
+        # (x2, y2) requires a bit of trigonometry
 
-        # convert to np.float32
-        Z = np.float32(Z)
+        # Note: the steering angle of:
+        # 0-89 degree: turn left
+        # 90 degree: going straight
+        # 91-180 degree: turn right
+        steering_angle_radian = steering_angle / 180.0 * math.pi
+        x1 = int(width / 2)
+        y1 = height
+        x2 = int(x1 - height / 2 / math.tan(steering_angle_radian))
+        y2 = int(height / 2)
 
-        # define criteria, number of clusters(K) and apply kmeans()
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-        ret, label, center=cv2.kmeans(Z,K,None,criteria,10,cv2.KMEANS_RANDOM_CENTERS)
+        cv2.line(heading_image, (x1, y1), (x2, y2), line_color, line_width)
+        heading_image = cv2.addWeighted(frame, 0.8, heading_image, 1, 1)
 
-        # Now convert back into uint8, and make original image
-        center = np.uint8(center)
-        res = center[label.flatten()]
-        res2 = res.reshape((img.shape))
-
-        # convert to gray scale
-        img_gray = cv2.cvtColor(res2, cv2.COLOR_BGR2GRAY)
-
-        return img_gray
+        return heading_image
 
     def hough_steering(self, cam_img):
         scan_line = cam_img[self.vert_scan_y : -50, :, :]
@@ -117,8 +119,10 @@ class LineFollower:
             if  abs(angle_deviation) > self.max_steering_deviation:
                 steering = int(steering + self.max_steering_deviation * angle_deviation / abs(angle_deviation))
 
-        return img_blur, steering
-    
+        img  = display_heading_line(img_blur, angle)
+
+        return img, steering
+
     def run(self, cam_img):
         #img_lane_mask, avg_lane_pos = self.lane_detection(cam_img)
         img_lane_mask, self.steering = self.hough_steering(cam_img)
@@ -152,7 +156,7 @@ class JoyTeleop:
         self.offline_services = []
 
         self.old_buttons = []
-        
+
         # custom line follower and image processing pipeline
         self.image_processor = ImageProcessor()
         self.line_follower = LineFollower()
@@ -277,7 +281,7 @@ class JoyTeleop:
         # Check if this is a default command
         if 'is_default' not in command:
             command['is_default'] = False
-        
+
         if command['type'] == 'topic':
             if 'deadman_buttons' not in command:
                 command['deadman_buttons'] = []
@@ -354,7 +358,7 @@ class JoyTeleop:
                   # rospy.logerr("Testing: " + str(val))
 
                 self.set_member(msg, mapping['target'], val)
-                
+
         self.publishers[cmd['topic_name']].publish(msg)
         # rospy.logerr(msg)
 
